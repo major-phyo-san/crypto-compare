@@ -1,0 +1,1 @@
+"""Crypto Compare application package."""
