@@ -37,11 +37,12 @@ class CompareWorker(QObject):
     finished = pyqtSignal(list, int, str, bool)
     failed = pyqtSignal(str)
 
-    def __init__(self, raw_data: bytes, iterations: int, file_name: str) -> None:
+    def __init__(self, raw_data: bytes, iterations: int, file_name: str, mode: int = BlockCipher.MODE_ECB) -> None:
         super().__init__()
         self.raw_data = raw_data
         self.iterations = iterations
         self.file_name = file_name
+        self.mode = mode
 
     def run(self) -> None:
         algo_configs = [
@@ -51,7 +52,7 @@ class CompareWorker(QObject):
                 "block_size": 8,
                 "key_size": 16,
                 "rounds": 31,
-                "key": b"PRESENTKEY",
+                "key": b"PRESENT-KEY-128!",
             },
             {
                 "algorithm": "SPECK",
@@ -81,6 +82,7 @@ class CompareWorker(QObject):
                     block_size=config["block_size"],
                     key_size=config["key_size"],
                     rounds=config["rounds"],
+                    mode=self.mode,
                     progress_callback=on_step,
                 )
                 rows.append(
@@ -116,12 +118,13 @@ class CompareWorker(QObject):
         block_size: int,
         key_size: int,
         rounds: int,
+        mode: int = BlockCipher.MODE_ECB,
         progress_callback: Callable[[], None] | None = None,
     ) -> dict[str, float | int | bool]:
         cipher = create_cipher(
             algorithm=algorithm,
             key=key,
-            mode=BlockCipher.MODE_ECB,
+            mode=mode,
             block_size=block_size,
             key_size=key_size,
             rounds=rounds,
@@ -247,9 +250,11 @@ class MainWindow(QMainWindow):
         self.iterations_box.setRange(1, 1000)
         self.iterations_box.setValue(30)
 
+        # Mode selection is hidden but kept for internal use
         self.mode_box = QComboBox()
         self.mode_box.addItems(["ECB"])
-        self.mode_box.setEnabled(False)
+        self.mode_box.setCurrentText("ECB")
+        self.mode_box.setVisible(False)  # Hide the mode selection box
 
         self.run_all_btn = QPushButton("Run Compare")
         self.run_all_btn.clicked.connect(self._run_real_comparison)
@@ -263,10 +268,14 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.selected_file_label, 0, 2)
         controls_layout.addWidget(QLabel("Iterations"), 1, 0)
         controls_layout.addWidget(self.iterations_box, 1, 1)
-        controls_layout.addWidget(QLabel("Mode"), 2, 0)
-        controls_layout.addWidget(self.mode_box, 2, 1)
-        controls_layout.addWidget(self.run_all_btn, 1, 2)
-        controls_layout.addWidget(self.progress, 2, 2)
+        
+        # Mode selection is hidden - create hidden widgets but don't add to layout
+        # to avoid leaving empty space
+        self.mode_box.setVisible(False)
+        
+        # Adjust layout: move run button and progress bar
+        controls_layout.addWidget(self.run_all_btn, 0, 2)
+        controls_layout.addWidget(self.progress, 1, 2)
 
         self.results_table = QTableWidget(3, 7)
         self.results_table.setHorizontalHeaderLabels(
@@ -370,8 +379,17 @@ class MainWindow(QMainWindow):
 
         iterations = self.iterations_box.value()
         file_name = Path(self.selected_file_path).name
+        
+        # Mode is always ECB (mode selection is hidden)
+        mode = BlockCipher.MODE_ECB
+        
         self._worker_thread = QThread(self)
-        self._worker = CompareWorker(raw_data=raw_data, iterations=iterations, file_name=file_name)
+        self._worker = CompareWorker(
+            raw_data=raw_data, 
+            iterations=iterations, 
+            file_name=file_name,
+            mode=mode
+        )
         self._worker.moveToThread(self._worker_thread)
 
         self._worker_thread.started.connect(self._worker.run)
@@ -401,6 +419,8 @@ class MainWindow(QMainWindow):
                 self.results_table.setItem(row_idx, col_idx, QTableWidgetItem(text))
 
         best_algo = max(rows, key=lambda item: item[3])[0]
+        
+        # Mode is always ECB
         self._append_history(
             file_name=file_name,
             best_algo=best_algo,
@@ -418,7 +438,7 @@ class MainWindow(QMainWindow):
             f"Best throughput: {best_algo}"
             f"{sample_note}\n"
             "Energy source: estimated from CPU utilization and elapsed time.\n"
-            "AES uses pycryptodome backend; PRESENT and SPECK use local implementations."
+            "All algorithms use local implementations."
         )
         self.run_all_btn.setEnabled(True)
         self.select_file_btn.setEnabled(True)
