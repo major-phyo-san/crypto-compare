@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from Crypto.Cipher import AES as CryptoAES
+
+from app.crypto.base import BlockCipher, CipherError
+
+
+class AES(BlockCipher):
+    """Thin wrapper over pycryptodome AES using the same local cipher API."""
+
+    _STANDARD_ROUNDS = {16: 10, 24: 12, 32: 14}
+
+    def __init__(
+        self,
+        key: bytes,
+        block_size: int,
+        key_size: int,
+        rounds: int,
+        mode: int = BlockCipher.MODE_ECB,
+    ) -> None:
+        super().__init__(key=key, block_size=block_size, key_size=key_size, rounds=rounds, mode=mode)
+        if self.block_size != 16:
+            raise CipherError("AES supports 16-byte block_size only")
+        if self.key_size not in self._STANDARD_ROUNDS:
+            raise CipherError("AES key_size must be 16, 24, or 32 bytes")
+
+        standard_rounds = self._STANDARD_ROUNDS[self.key_size]
+        if self.rounds != standard_rounds:
+            raise CipherError(
+                f"AES rounds for key_size {self.key_size} must be {standard_rounds} "
+                "(pycryptodome does not support custom AES rounds)"
+            )
+
+        self._cipher = CryptoAES.new(self.key, CryptoAES.MODE_ECB)
+
+    def encrypt_block(self, block: bytes) -> bytes:
+        return self._cipher.encrypt(block)
+
+    def decrypt_block(self, block: bytes) -> bytes:
+        return self._cipher.decrypt(block)

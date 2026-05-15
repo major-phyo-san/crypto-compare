@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+from app.crypto.base import BlockCipher, CipherError
+
+SBOX = [0xC, 0x5, 0x6, 0xB, 0x9, 0x0, 0xA, 0xD, 0x3, 0xE, 0xF, 0x8, 0x4, 0x7, 0x1, 0x2]
+SBOX_INV = [SBOX.index(i) for i in range(16)]
+
+
+class PRESENT(BlockCipher):
+    """PRESENT block cipher with configurable key size and rounds."""
+
+    def __init__(
+        self,
+        key: bytes,
+        block_size: int,
+        key_size: int,
+        rounds: int,
+        mode: int = BlockCipher.MODE_ECB,
+    ) -> None:
+        super().__init__(key=key, block_size=block_size, key_size=key_size, rounds=rounds, mode=mode)
+        if self.block_size != 8:
+            raise CipherError("PRESENT supports 64-bit blocks only (block_size=8)")
+        if self.key_size not in (10, 16):
+            raise CipherError("PRESENT key_size must be 10 bytes (80-bit) or 16 bytes (128-bit)")
+        if self.rounds <= 0:
+            raise CipherError("PRESENT rounds must be positive")
+
+        self._round_keys = self._generate_round_keys()
+
+    def _generate_round_keys(self) -> list[int]:
+        if self.key_size == 10:
+            return self._round_keys_80()
+        return self._round_keys_128()
+
+    def _round_keys_80(self) -> list[int]:
+        key_reg = int.from_bytes(self.key, "big")
+        round_keys: list[int] = []
+
+        for round_idx in range(1, self.rounds + 1):
+            round_keys.append((key_reg >> 16) & ((1 << 64) - 1))
+            key_reg = ((key_reg << 61) & ((1 << 80) - 1)) | (key_reg >> 19)
+            top_nibble = (key_reg >> 76) & 0xF
+            key_reg = (key_reg & ((1 << 76) - 1)) | (SBOX[top_nibble] << 76)
+            key_reg ^= (round_idx & 0x1F) << 15
+        return round_keys
+
+    def _round_keys_128(self) -> list[int]:
+        key_reg = int.from_bytes(self.key, "big")
+        round_keys: list[int] = []
+
+        for round_idx in range(1, self.rounds + 1):
+            round_keys.append((key_reg >> 64) & ((1 << 64) - 1))
+            key_reg = ((key_reg << 61) & ((1 << 128) - 1)) | (key_reg >> 67)
+            high_4 = (key_reg >> 124) & 0xF
+            next_4 = (key_reg >> 120) & 0xF
+            key_reg &= (1 << 120) - 1
+            key_reg |= SBOX[high_4] << 124
+            key_reg |= SBOX[next_4] << 120
+            key_reg ^= (round_idx & 0x1F) << 62
+        return round_keys
+
+    @staticmethod
+    def _sbox_layer(state: int) -> int:
+        out = 0
+        for i in range(16):
+            nibble = (state >> (i * 4)) & 0xF
+            out |= SBOX[nibble] << (i * 4)
+        return out
+
+    @staticmethod
+    def _sbox_layer_inv(state: int) -> int:
+        out = 0
+        for i in range(16):
+            nibble = (state >> (i * 4)) & 0xF
+            out |= SBOX_INV[nibble] << (i * 4)
+        return out
+
+    @staticmethod
+    def _p_layer(state: int) -> int:
+        out = 0
+        for bit in range(63):
+            dst = (16 * bit) % 63
+            out |= ((state >> bit) & 1) << dst
+        out |= ((state >> 63) & 1) << 63
+        return out
+
+    @staticmethod
+    def _p_layer_inv(state: int) -> int:
+        out = 0
+        for bit in range(63):
+            src = (16 * bit) % 63
+            out |= ((state >> src) & 1) << bit
+        out |= ((state >> 63) & 1) << 63
+        return out
+
+    def encrypt_block(self, block: bytes) -> bytes:
+        state = int.from_bytes(block, "big")
+        for round_idx in range(self.rounds - 1):
+            state ^= self._round_keys[round_idx]
+            state = self._sbox_layer(state)
+            state = self._p_layer(state)
+        state ^= self._round_keys[self.rounds - 1]
+        return state.to_bytes(8, "big")
+
+    def decrypt_block(self, block: bytes) -> bytes:
+        state = int.from_bytes(block, "big")
+        state ^= self._round_keys[self.rounds - 1]
+        for round_idx in range(self.rounds - 2, -1, -1):
+            state = self._p_layer_inv(state)
+            state = self._sbox_layer_inv(state)
+            state ^= self._round_keys[round_idx]
+        return state.to_bytes(8, "big")
