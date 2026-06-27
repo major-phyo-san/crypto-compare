@@ -27,21 +27,29 @@ from PyQt6.QtWidgets import (
 )
 
 from app.crypto import BlockCipher, CipherError, create_cipher
+from app.system import CPUProfile, detect_cpu_profile
 
 
 class CompareWorker(QObject):
     MAX_SAMPLE_BYTES = 512 * 1024
-    ESTIMATED_CPU_POWER_WATTS = 65.0
 
     progress = pyqtSignal(int)
     finished = pyqtSignal(list, int, str, bool)
     failed = pyqtSignal(str)
 
-    def __init__(self, raw_data: bytes, iterations: int, file_name: str, mode: int = BlockCipher.MODE_ECB) -> None:
+    def __init__(
+        self,
+        raw_data: bytes,
+        iterations: int,
+        file_name: str,
+        cpu_profile: CPUProfile,
+        mode: int = BlockCipher.MODE_ECB,
+    ) -> None:
         super().__init__()
         self.raw_data = raw_data
         self.iterations = iterations
         self.file_name = file_name
+        self.cpu_profile = cpu_profile
         self.mode = mode
 
     def run(self) -> None:
@@ -82,6 +90,8 @@ class CompareWorker(QObject):
                     block_size=config["block_size"],
                     key_size=config["key_size"],
                     rounds=config["rounds"],
+                    cpu_idle_watts=self.cpu_profile.idle_watts,
+                    cpu_tdp_watts=self.cpu_profile.tdp_watts,
                     mode=self.mode,
                     progress_callback=on_step,
                 )
@@ -118,6 +128,8 @@ class CompareWorker(QObject):
         block_size: int,
         key_size: int,
         rounds: int,
+        cpu_idle_watts: float,
+        cpu_tdp_watts: float,
         mode: int = BlockCipher.MODE_ECB,
         progress_callback: Callable[[], None] | None = None,
     ) -> dict[str, float | int | bool]:
@@ -159,7 +171,8 @@ class CompareWorker(QObject):
         throughput_mb_s = (total_bytes / (1024 * 1024)) / total_seconds
         cpu_usage_pct = min(100.0, ((cpu_enc + cpu_dec) / total_seconds) * 100)
         memory_kb = max(1, (len(encrypted) * block_size) // 1024)
-        energy_j = (cpu_usage_pct / 100.0) * CompareWorker.ESTIMATED_CPU_POWER_WATTS * total_seconds
+        modeled_power_watts = cpu_idle_watts + ((cpu_usage_pct / 100.0) * (cpu_tdp_watts - cpu_idle_watts))
+        energy_j = modeled_power_watts * total_seconds
 
         return {
             "enc_ms": round(enc_ms, 3),
@@ -167,6 +180,7 @@ class CompareWorker(QObject):
             "throughput_mb_s": round(throughput_mb_s, 3),
             "memory_kb": memory_kb,
             "cpu_usage_pct": round(cpu_usage_pct, 2),
+            "modeled_power_watts": round(modeled_power_watts, 3),
             "energy_j": energy_j,
             "used_sampling": used_sampling,
         }
@@ -189,6 +203,7 @@ class MainWindow(QMainWindow):
         self.selected_file_path: str | None = None
         self._worker_thread: QThread | None = None
         self._worker: CompareWorker | None = None
+        self.cpu_profile = detect_cpu_profile()
         self.setWindowTitle("Crypto Compare Studio")
         self.resize(1080, 720)
         self._build_ui()
@@ -217,8 +232,19 @@ class MainWindow(QMainWindow):
 
         title = QLabel("Crypto Algorithms Analysis")
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
-        subtitle = QLabel("AES vs PRESENT vs SPECK")
+        subtitle = QLabel(
+            f"AES vs PRESENT vs SPECK | CPU: {self.cpu_profile.model_name} | "
+            f"Power: {self.cpu_profile.power_envelope_label}"
+        )
         subtitle.setStyleSheet("color: #666;")
+        subtitle.setToolTip(
+            f"Detection source: {self.cpu_profile.detection_source}\n"
+            f"TDP mapping source: {self.cpu_profile.tdp_source}\n"
+            f"TDP confidence: {self.cpu_profile.tdp_confidence}\n"
+            f"{self.cpu_profile.tdp_note}\n"
+            f"Power envelope: {self.cpu_profile.power_envelope_label}\n"
+            f"{self.cpu_profile.power_envelope_note}"
+        )
 
         text_layout = QVBoxLayout()
         text_layout.addWidget(title)
@@ -286,7 +312,7 @@ class MainWindow(QMainWindow):
                 "Throughput (MB/s)",
                 "Memory (KB)",
                 "CPU Usage (%)",
-                "Energy",
+                "Energy Est.",
             ]
         )
         self.results_table.verticalHeader().setVisible(False)
@@ -317,7 +343,7 @@ class MainWindow(QMainWindow):
                 "Avg Throughput (MB/s)",
                 "Avg Memory (KB)",
                 "Avg CPU (%)",
-                "Avg Energy",
+                "Avg Energy Est.",
                 "Mode",
             ]
         )
@@ -385,9 +411,10 @@ class MainWindow(QMainWindow):
         
         self._worker_thread = QThread(self)
         self._worker = CompareWorker(
-            raw_data=raw_data, 
-            iterations=iterations, 
+            raw_data=raw_data,
+            iterations=iterations,
             file_name=file_name,
+            cpu_profile=self.cpu_profile,
             mode=mode
         )
         self._worker.moveToThread(self._worker_thread)
@@ -437,7 +464,13 @@ class MainWindow(QMainWindow):
             f"Iterations: {iterations}\n"
             f"Best throughput: {best_algo}"
             f"{sample_note}\n"
-            "Energy source: estimated from CPU utilization and elapsed time.\n"
+            f"CPU profile: {self.cpu_profile.model_name}\n"
+            f"TDP mapping: {self.cpu_profile.tdp_label}\n"
+            f"TDP confidence: {self.cpu_profile.tdp_confidence}\n"
+            f"TDP note: {self.cpu_profile.tdp_note}\n"
+            f"Power envelope: {self.cpu_profile.power_envelope_label}\n"
+            f"Power model: {self.cpu_profile.power_envelope_note}\n"
+            "Energy source: model-based estimate from CPU utilization and elapsed time.\n"
             "All algorithms use local implementations."
         )
         self.run_all_btn.setEnabled(True)
