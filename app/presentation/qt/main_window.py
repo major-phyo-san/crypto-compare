@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import tracemalloc
+
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -147,22 +149,34 @@ class CompareWorker(QObject):
         if used_sampling:
             blocks = blocks[:max_blocks]
 
+        peak_mem_encrypt = 0
         enc_start = time.perf_counter()
         cpu_enc_start = time.process_time()
         encrypted: list[bytes] = []
-        for _ in range(iterations):
-            encrypted = [cipher.encrypt(block) for block in blocks]
-            if progress_callback is not None:
-                progress_callback()
+        tracemalloc.start()
+        try:
+            for _ in range(iterations):
+                encrypted = [cipher.encrypt(block) for block in blocks]
+                if progress_callback is not None:
+                    progress_callback()
+            _, peak_mem_encrypt = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
         enc_ms = (time.perf_counter() - enc_start) * 1000
         cpu_enc = time.process_time() - cpu_enc_start
 
+        peak_mem_decrypt = 0
         dec_start = time.perf_counter()
         cpu_dec_start = time.process_time()
-        for _ in range(iterations):
-            _ = [cipher.decrypt(block) for block in encrypted]
-            if progress_callback is not None:
-                progress_callback()
+        tracemalloc.start()
+        try:
+            for _ in range(iterations):
+                _ = [cipher.decrypt(block) for block in encrypted]
+                if progress_callback is not None:
+                    progress_callback()
+            _, peak_mem_decrypt = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
         dec_ms = (time.perf_counter() - dec_start) * 1000
         cpu_dec = time.process_time() - cpu_dec_start
 
@@ -170,7 +184,8 @@ class CompareWorker(QObject):
         total_bytes = len(blocks) * block_size * iterations
         throughput_mb_s = (total_bytes / (1024 * 1024)) / total_seconds
         cpu_usage_pct = min(100.0, ((cpu_enc + cpu_dec) / total_seconds) * 100)
-        memory_kb = max(1, (len(encrypted) * block_size) // 1024)
+        peak_memory_bytes = max(peak_mem_encrypt, peak_mem_decrypt)
+        memory_kb = max(1, int(peak_memory_bytes / 1024))
         modeled_power_watts = cpu_idle_watts + ((cpu_usage_pct / 100.0) * (cpu_tdp_watts - cpu_idle_watts))
         energy_j = modeled_power_watts * total_seconds
 
