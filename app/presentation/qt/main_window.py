@@ -64,13 +64,6 @@ class CompareWorker(QObject):
                 "rounds": 31,
                 "key": b"PRESENT-KEY-128!",
             },
-            {
-                "algorithm": "SPECK",
-                "block_size": 8,
-                "key_size": 16,
-                "rounds": 22,
-                "key": b"SPECK-TEST-KEY!!",
-            },
         ]
         rows: list[tuple[str, float, float, float, int, float, float]] = []
         sampled = False
@@ -248,7 +241,7 @@ class MainWindow(QMainWindow):
         title = QLabel("Crypto Algorithms Analysis")
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
         subtitle = QLabel(
-            f"AES vs PRESENT vs SPECK | CPU: {self.cpu_profile.model_name} | "
+            f"AES vs PRESENT | CPU: {self.cpu_profile.model_name} | "
             f"Power: {self.cpu_profile.power_envelope_label}"
         )
         subtitle.setStyleSheet("color: #666;")
@@ -318,7 +311,7 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.run_all_btn, 0, 2)
         controls_layout.addWidget(self.progress, 1, 2)
 
-        self.results_table = QTableWidget(3, 7)
+        self.results_table = QTableWidget(2, 7)
         self.results_table.setHorizontalHeaderLabels(
             [
                 "Algorithm",
@@ -340,7 +333,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(controls_group)
         layout.addWidget(self.results_table, stretch=2)
-        layout.addWidget(self.summary_box, stretch=1)
+        # layout.addWidget(self.summary_box, stretch=1)
         return tab
 
     def _build_history_tab(self) -> QWidget:
