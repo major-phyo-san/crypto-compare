@@ -15,6 +15,54 @@ SBOX_INV = [0] * 16
 for i, v in enumerate(SBOX):
     SBOX_INV[v] = i
 
+MASK64 = (1 << 64) - 1
+
+
+def _build_byte_sbox_table(sbox: list[int]) -> list[int]:
+    table: list[int] = []
+    for byte in range(256):
+        low = sbox[byte & 0xF]
+        high = sbox[(byte >> 4) & 0xF]
+        table.append(low | (high << 4))
+    return table
+
+
+def _p_layer_reference(state: int) -> int:
+    out = 0
+    for bit in range(63):
+        dst = (16 * bit) % 63
+        out |= ((state >> bit) & 1) << dst
+    out |= ((state >> 63) & 1) << 63
+    return out
+
+
+def _p_layer_inv_reference(state: int) -> int:
+    out = 0
+    for bit in range(63):
+        src = (16 * bit) % 63
+        out |= ((state >> src) & 1) << bit
+    out |= ((state >> 63) & 1) << 63
+    return out
+
+
+def _build_permutation_tables(
+    permute: callable,
+) -> tuple[tuple[int, ...], ...]:
+    tables: list[tuple[int, ...]] = []
+    for byte_index in range(8):
+        table_for_byte: list[int] = []
+        shift = byte_index * 8
+        for byte in range(256):
+            table_for_byte.append(permute(byte << shift) & MASK64)
+        tables.append(tuple(table_for_byte))
+    return tuple(tables)
+
+
+SBOX_BYTE = tuple(_build_byte_sbox_table(SBOX))
+SBOX_INV_BYTE = tuple(_build_byte_sbox_table(SBOX_INV))
+P_LAYER_TABLES = _build_permutation_tables(_p_layer_reference)
+P_LAYER_INV_TABLES = _build_permutation_tables(_p_layer_inv_reference)
+
 
 class PRESENT(BlockCipher):
     """
@@ -147,23 +195,29 @@ class PRESENT(BlockCipher):
 
     @staticmethod
     def _sbox_layer(state: int) -> int:
-        out = 0
-
-        for i in range(16):
-            nibble = (state >> (i * 4)) & 0xF
-            out |= SBOX[nibble] << (i * 4)
-
-        return out
+        return (
+            SBOX_BYTE[state & 0xFF]
+            | (SBOX_BYTE[(state >> 8) & 0xFF] << 8)
+            | (SBOX_BYTE[(state >> 16) & 0xFF] << 16)
+            | (SBOX_BYTE[(state >> 24) & 0xFF] << 24)
+            | (SBOX_BYTE[(state >> 32) & 0xFF] << 32)
+            | (SBOX_BYTE[(state >> 40) & 0xFF] << 40)
+            | (SBOX_BYTE[(state >> 48) & 0xFF] << 48)
+            | (SBOX_BYTE[(state >> 56) & 0xFF] << 56)
+        )
 
     @staticmethod
     def _sbox_layer_inv(state: int) -> int:
-        out = 0
-
-        for i in range(16):
-            nibble = (state >> (i * 4)) & 0xF
-            out |= SBOX_INV[nibble] << (i * 4)
-
-        return out
+        return (
+            SBOX_INV_BYTE[state & 0xFF]
+            | (SBOX_INV_BYTE[(state >> 8) & 0xFF] << 8)
+            | (SBOX_INV_BYTE[(state >> 16) & 0xFF] << 16)
+            | (SBOX_INV_BYTE[(state >> 24) & 0xFF] << 24)
+            | (SBOX_INV_BYTE[(state >> 32) & 0xFF] << 32)
+            | (SBOX_INV_BYTE[(state >> 40) & 0xFF] << 40)
+            | (SBOX_INV_BYTE[(state >> 48) & 0xFF] << 48)
+            | (SBOX_INV_BYTE[(state >> 56) & 0xFF] << 56)
+        )
 
     # ============================================================
     # Permutation Layer
@@ -171,28 +225,29 @@ class PRESENT(BlockCipher):
 
     @staticmethod
     def _p_layer(state: int) -> int:
-        out = 0
-
-        for bit in range(63):
-            dst = (16 * bit) % 63
-            out |= ((state >> bit) & 1) << dst
-
-        # Preserve MSB
-        out |= ((state >> 63) & 1) << 63
-
-        return out
+        return (
+            P_LAYER_TABLES[0][state & 0xFF]
+            | P_LAYER_TABLES[1][(state >> 8) & 0xFF]
+            | P_LAYER_TABLES[2][(state >> 16) & 0xFF]
+            | P_LAYER_TABLES[3][(state >> 24) & 0xFF]
+            | P_LAYER_TABLES[4][(state >> 32) & 0xFF]
+            | P_LAYER_TABLES[5][(state >> 40) & 0xFF]
+            | P_LAYER_TABLES[6][(state >> 48) & 0xFF]
+            | P_LAYER_TABLES[7][(state >> 56) & 0xFF]
+        )
 
     @staticmethod
     def _p_layer_inv(state: int) -> int:
-        out = 0
-
-        for bit in range(63):
-            src = (16 * bit) % 63
-            out |= ((state >> src) & 1) << bit
-
-        out |= ((state >> 63) & 1) << 63
-
-        return out
+        return (
+            P_LAYER_INV_TABLES[0][state & 0xFF]
+            | P_LAYER_INV_TABLES[1][(state >> 8) & 0xFF]
+            | P_LAYER_INV_TABLES[2][(state >> 16) & 0xFF]
+            | P_LAYER_INV_TABLES[3][(state >> 24) & 0xFF]
+            | P_LAYER_INV_TABLES[4][(state >> 32) & 0xFF]
+            | P_LAYER_INV_TABLES[5][(state >> 40) & 0xFF]
+            | P_LAYER_INV_TABLES[6][(state >> 48) & 0xFF]
+            | P_LAYER_INV_TABLES[7][(state >> 56) & 0xFF]
+        )
 
     # ============================================================
     # Encryption
