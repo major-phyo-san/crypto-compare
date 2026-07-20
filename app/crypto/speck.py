@@ -13,12 +13,12 @@ class SPECK(BlockCipher):
     - rounds
 
     Default configuration:
-    SPECK64/128
+    SPECK128/128
     """
 
-    DEFAULT_BLOCK_SIZE = 8   # 64-bit block
+    DEFAULT_BLOCK_SIZE = 16  # 128-bit block
     DEFAULT_KEY_SIZE = 16    # 128-bit key
-    DEFAULT_ROUNDS = 27
+    DEFAULT_ROUNDS = 32
 
     def __init__(
         self,
@@ -126,10 +126,10 @@ class SPECK(BlockCipher):
         key_words = [
             int.from_bytes(
                 self.key[i:i + self._word_bytes],
-                "little"
+                "big"
             )
             for i in range(0, len(self.key), self._word_bytes)
-        ]
+        ][::-1]
 
         # First key word becomes first round key
         round_keys = [key_words[0]]
@@ -172,12 +172,12 @@ class SPECK(BlockCipher):
         # Split plaintext block into two words
         x = int.from_bytes(
             block[:self._word_bytes],
-            "little"
+            "big"
         )
 
         y = int.from_bytes(
             block[self._word_bytes:],
-            "little"
+            "big"
         )
 
         # Encryption rounds
@@ -193,8 +193,8 @@ class SPECK(BlockCipher):
 
         # Recombine ciphertext
         return (
-            x.to_bytes(self._word_bytes, "little")
-            + y.to_bytes(self._word_bytes, "little")
+            x.to_bytes(self._word_bytes, "big")
+            + y.to_bytes(self._word_bytes, "big")
         )
 
     # ============================================================
@@ -211,12 +211,12 @@ class SPECK(BlockCipher):
         # Split ciphertext block
         x = int.from_bytes(
             block[:self._word_bytes],
-            "little"
+            "big"
         )
 
         y = int.from_bytes(
             block[self._word_bytes:],
-            "little"
+            "big"
         )
 
         # Reverse rounds
@@ -236,6 +236,6 @@ class SPECK(BlockCipher):
 
         # Recombine plaintext
         return (
-            x.to_bytes(self._word_bytes, "little")
-            + y.to_bytes(self._word_bytes, "little")
+            x.to_bytes(self._word_bytes, "big")
+            + y.to_bytes(self._word_bytes, "big")
         )
