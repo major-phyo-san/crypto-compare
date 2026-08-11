@@ -8,6 +8,8 @@ import tracemalloc
 from datetime import datetime
 from pathlib import Path
 
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -24,6 +26,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStyle,
     QTabWidget,
@@ -62,6 +66,18 @@ HISTORY_HEADERS = (
     "CPU Usage (%)",
     "Energy Est.",
     "Output File",
+)
+ALGORITHM_COLORS = {
+    "AES": "#0ea5e9",
+    "PRESENT": "#f97316",
+    "SPECK": "#2563eb",
+}
+GRAPH_METRICS = (
+    ("time_ms", "Time (ms)"),
+    ("throughput_mb_s", "Throughput (MB/s)"),
+    ("memory_kb", "Memory (KB)"),
+    ("cpu_usage_pct", "CPU Usage (%)"),
+    ("energy_j", "Energy (J)"),
 )
 
 
@@ -198,6 +214,80 @@ class FileOperationWorker(QObject):
         return [data[i : i + block_size] for i in range(0, len(data), block_size)]
 
 
+class MetricBarChart(QWidget):
+    """Matplotlib bar chart for one analysis metric."""
+
+    def __init__(self, *, title: str, y_label: str) -> None:
+        super().__init__()
+        self.title = title
+        self.y_label = y_label
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.figure = Figure(figsize=(3.2, 1.9), dpi=100, facecolor="#ffffff")
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.setMinimumHeight(185)
+        self.canvas.setMaximumHeight(205)
+        layout.addWidget(self.canvas)
+        self.update_values({})
+
+    def update_values(self, values_by_algorithm: dict[str, float]) -> None:
+        self.figure.clear()
+        axis = self.figure.add_subplot(111)
+        axis.set_facecolor("#ffffff")
+        algorithms = list(ALGORITHM_CONFIGS)
+        values = [values_by_algorithm.get(algorithm, 0.0) for algorithm in algorithms]
+        colors = [ALGORITHM_COLORS[algorithm] for algorithm in algorithms]
+
+        bars = axis.bar(algorithms, values, color=colors, width=0.48)
+        axis.set_title(self.title, color="#0f172a", fontsize=9.5, fontweight="bold")
+        axis.set_ylabel(self.y_label, color="#475569", fontsize=8.5)
+        axis.grid(axis="y", color="#e2e8f0", linewidth=0.7)
+        axis.set_axisbelow(True)
+        axis.tick_params(axis="x", colors="#0f172a", labelsize=8.5, length=0)
+        axis.tick_params(axis="y", colors="#475569", labelsize=8)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["left"].set_color("#cbd5e1")
+        axis.spines["bottom"].set_color("#cbd5e1")
+
+        if any(value > 0 for value in values):
+            top_value = max(values)
+            axis.set_ylim(0, top_value * 1.16 if top_value > 0 else 1)
+            for bar, value in zip(bars, values):
+                if value <= 0:
+                    continue
+                label = f"{value:.3f}" if value < 1000 else f"{value:,.0f}"
+                axis.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    label,
+                    ha="center",
+                    va="bottom",
+                    color="#0f172a",
+                    fontsize=7.5,
+                )
+        else:
+            axis.set_ylim(0, 1)
+            axis.text(
+                0.5,
+                0.52,
+                "Run algorithms to generate this graph",
+                transform=axis.transAxes,
+                ha="center",
+                va="center",
+                color="#64748b",
+                fontsize=8,
+            )
+
+        self.figure.tight_layout(pad=0.9)
+        self.canvas.draw_idle()
+
+
 class MainWindow(QMainWindow):
     """Main UI shell for crypto algorithm comparison."""
 
@@ -210,6 +300,14 @@ class MainWindow(QMainWindow):
         self._pending_plaintext: bytes | None = None
         self._pending_package: CiphertextPackage | None = None
         self._operation_input_name = ""
+        self._graph_data: dict[str, dict[str, dict[str, float]]] = {
+            "encrypt": {},
+            "decrypt": {},
+        }
+        self._graph_charts: dict[str, dict[str, MetricBarChart]] = {
+            "encrypt": {},
+            "decrypt": {},
+        }
         self.cpu_profile = detect_cpu_profile()
         self.setWindowTitle("Crypto Compare Studio")
         self.setWindowIcon(
@@ -234,6 +332,7 @@ class MainWindow(QMainWindow):
         self.tabs.setObjectName("primaryTabs")
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self._build_file_operations_tab(), "File Operations")
+        self.tabs.addTab(self._build_graph_analysis_tab(), "Graph Analysis")
         self.tabs.addTab(self._build_history_tab(), "History & Export")
         root_layout.addWidget(self.tabs)
 
@@ -249,7 +348,7 @@ class MainWindow(QMainWindow):
         title = QLabel("Crypto Compare Studio")
         title.setObjectName("appTitle")
         subtitle = QLabel(
-            f"AES-128 | PRESENT-128 | SPECK128/128   /   "
+            f"AES-128 | PRESENT-128 | SPECK-128/128   /   "
             f"{self.cpu_profile.model_name}   /   {self.cpu_profile.power_envelope_label}"
         )
         subtitle.setObjectName("appSubtitle")
@@ -424,6 +523,57 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         return table
 
+    def _build_graph_analysis_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 10, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+        content_layout.addWidget(
+            self._build_graph_section("Encryption Graphs", "encrypt")
+        )
+        content_layout.addWidget(
+            self._build_graph_section("Decryption Graphs", "decrypt")
+        )
+        content_layout.addStretch()
+
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+        return tab
+
+    def _build_graph_section(self, title_text: str, operation: str) -> QWidget:
+        frame = QFrame()
+        frame.setObjectName("controlsPanel")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 12, 16, 14)
+        layout.setSpacing(8)
+
+        section_title = QLabel(title_text)
+        section_title.setObjectName("sectionTitle")
+        layout.addWidget(section_title)
+
+        chart_grid = QGridLayout()
+        chart_grid.setHorizontalSpacing(10)
+        chart_grid.setVerticalSpacing(8)
+        layout.addLayout(chart_grid)
+
+        for index, (metric_key, metric_label) in enumerate(GRAPH_METRICS):
+            chart = MetricBarChart(
+                title=f"{title_text.replace('Graphs', '').strip()} {metric_label}",
+                y_label=metric_label,
+            )
+            self._graph_charts[operation][metric_key] = chart
+            chart_grid.addWidget(chart, index // 3, index % 3)
+
+        return frame
+
     def _build_history_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -540,7 +690,7 @@ class MainWindow(QMainWindow):
             self,
             "Save Ciphertext File",
             str(suggested_path),
-            "TTW Ciphertext (*.ttwc)",
+            "SDCC Files (*.ttwc)",
         )
         if not output_path:
             return
@@ -571,7 +721,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Ciphertext File",
             "",
-            "TTW Ciphertext (*.ttwc);;All Files (*)",
+            "SDCC Files (*.ttwc);;All Files (*)",
         )
         if not input_path:
             return
@@ -827,12 +977,40 @@ class MainWindow(QMainWindow):
             if column == 8:
                 item.setToolTip(str(output_path))
             table.setItem(row_index, column, item)
+        operation = "encrypt" if table is self.encryption_table else "decrypt"
+        self._update_graph_data(
+            operation=operation,
+            algorithm=algorithm,
+            metrics=metrics,
+        )
+
+    def _update_graph_data(
+        self,
+        *,
+        operation: str,
+        algorithm: str,
+        metrics: dict[str, float | int],
+    ) -> None:
+        self._graph_data[operation][algorithm] = {
+            metric_key: float(metrics[metric_key])
+            for metric_key, _ in GRAPH_METRICS
+        }
+        for metric_key, _ in GRAPH_METRICS:
+            values = {
+                algo: algo_metrics[metric_key]
+                for algo, algo_metrics in self._graph_data[operation].items()
+            }
+            self._graph_charts[operation][metric_key].update_values(values)
 
     def _clear_history(self) -> None:
         self.history_table.setRowCount(0)
         self._history_rows.clear()
         self.encryption_table.setRowCount(0)
         self.decryption_table.setRowCount(0)
+        for operation in self._graph_data:
+            self._graph_data[operation].clear()
+            for chart in self._graph_charts[operation].values():
+                chart.update_values({})
         self.export_json_btn.setEnabled(False)
         self.export_csv_btn.setEnabled(False)
         self.clear_history_btn.setEnabled(False)
@@ -889,5 +1067,4 @@ class MainWindow(QMainWindow):
         if energy_joules >= 1e-3:
             return f"{energy_joules * 1e3:.3f} mJ"
         return f"{energy_joules * 1e6:.3f} uJ"
-
 

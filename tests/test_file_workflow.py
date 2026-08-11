@@ -71,7 +71,7 @@ class FileWorkflowTests(unittest.TestCase):
         self.assertTrue(package.verify_plaintext(b""))
 
     def test_invalid_package_is_rejected(self) -> None:
-        with self.assertRaises(CiphertextFormatError):
+        with self.assertRaisesRegex(CiphertextFormatError, "SDCC"):
             parse_ciphertext_package(b"not a ciphertext package")
 
     def test_wrong_key_fails_plaintext_verification(self) -> None:

@@ -126,10 +126,10 @@ class SPECK(BlockCipher):
         key_words = [
             int.from_bytes(
                 self.key[i:i + self._word_bytes],
-                "big"
+                "little"
             )
             for i in range(0, len(self.key), self._word_bytes)
-        ][::-1]
+        ]
 
         # First key word becomes first round key
         round_keys = [key_words[0]]
@@ -169,15 +169,15 @@ class SPECK(BlockCipher):
                 f"SPECK block must be {self.block_size} bytes"
             )
 
-        # Split plaintext block into two words
-        x = int.from_bytes(
+        # Published SPECK byte ordering stores the right word first.
+        y = int.from_bytes(
             block[:self._word_bytes],
-            "big"
+            "little"
         )
 
-        y = int.from_bytes(
+        x = int.from_bytes(
             block[self._word_bytes:],
-            "big"
+            "little"
         )
 
         # Encryption rounds
@@ -191,10 +191,10 @@ class SPECK(BlockCipher):
 
             y = self._rol(y, self._beta) ^ x
 
-        # Recombine ciphertext
+        # Store the right word first, following the published byte ordering.
         return (
-            x.to_bytes(self._word_bytes, "big")
-            + y.to_bytes(self._word_bytes, "big")
+            y.to_bytes(self._word_bytes, "little")
+            + x.to_bytes(self._word_bytes, "little")
         )
 
     # ============================================================
@@ -208,15 +208,15 @@ class SPECK(BlockCipher):
                 f"SPECK block must be {self.block_size} bytes"
             )
 
-        # Split ciphertext block
-        x = int.from_bytes(
+        # Published SPECK byte ordering stores the right word first.
+        y = int.from_bytes(
             block[:self._word_bytes],
-            "big"
+            "little"
         )
 
-        y = int.from_bytes(
+        x = int.from_bytes(
             block[self._word_bytes:],
-            "big"
+            "little"
         )
 
         # Reverse rounds
@@ -236,6 +236,6 @@ class SPECK(BlockCipher):
 
         # Recombine plaintext
         return (
-            x.to_bytes(self._word_bytes, "big")
-            + y.to_bytes(self._word_bytes, "big")
+            y.to_bytes(self._word_bytes, "little")
+            + x.to_bytes(self._word_bytes, "little")
         )

@@ -260,16 +260,11 @@ class PRESENT(BlockCipher):
 
         state = int.from_bytes(block, "big")
 
-        # 31 rounds
+        # 31 substitution-permutation rounds
         for round_idx in range(self.rounds):
-
-            # AddRoundKey
             state ^= self._round_keys[round_idx]
-
-            # Final round does not apply S/P layers
-            if round_idx != self.rounds - 1:
-                state = self._sbox_layer(state)
-                state = self._p_layer(state)
+            state = self._sbox_layer(state)
+            state = self._p_layer(state)
 
         # Final whitening key
         state ^= self._round_keys[self.rounds]
@@ -291,12 +286,8 @@ class PRESENT(BlockCipher):
         state ^= self._round_keys[self.rounds]
 
         for round_idx in range(self.rounds - 1, -1, -1):
-
-            # Reverse AddRoundKey
+            state = self._p_layer_inv(state)
+            state = self._sbox_layer_inv(state)
             state ^= self._round_keys[round_idx]
-
-            if round_idx != 0:
-                state = self._p_layer_inv(state)
-                state = self._sbox_layer_inv(state)
 
         return state.to_bytes(8, "big")

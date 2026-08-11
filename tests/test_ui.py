@@ -32,6 +32,54 @@ class MainWindowUiTests(unittest.TestCase):
         self.window.show_key_box.setChecked(True)
         self.assertEqual(self.window.key_input.echoMode(), QLineEdit.EchoMode.Normal)
 
+    def test_graph_analysis_tab_is_after_file_operations(self) -> None:
+        tab_names = [
+            self.window.tabs.tabText(index)
+            for index in range(self.window.tabs.count())
+        ]
+
+        self.assertEqual(
+            tab_names,
+            ["File Operations", "Graph Analysis", "History & Export"],
+        )
+
+    def test_graph_data_keeps_latest_run_per_algorithm(self) -> None:
+        first_metrics = {
+            "time_ms": 10.0,
+            "throughput_mb_s": 2.0,
+            "memory_kb": 128,
+            "cpu_usage_pct": 50.0,
+            "energy_j": 1.0,
+            "iterations": 1,
+            "processed_bytes": 16,
+            "modeled_power_watts": 5.0,
+        }
+        latest_metrics = dict(first_metrics, time_ms=20.0, energy_j=2.5)
+
+        self.window._append_analysis_row(
+            table=self.window.encryption_table,
+            algorithm="AES",
+            input_name="sample.bin",
+            metrics=first_metrics,
+            output_path=Path("sample.bin.aes.ttwc"),
+        )
+        self.window._append_analysis_row(
+            table=self.window.encryption_table,
+            algorithm="AES",
+            input_name="sample.bin",
+            metrics=latest_metrics,
+            output_path=Path("sample.bin.aes.ttwc"),
+        )
+
+        self.assertEqual(
+            self.window._graph_data["encrypt"]["AES"]["time_ms"],
+            20.0,
+        )
+        self.assertEqual(
+            self.window._graph_data["encrypt"]["AES"]["energy_j"],
+            2.5,
+        )
+
     def test_iterations_label_stays_close_to_input(self) -> None:
         self.window.show()
         self.app.processEvents()
@@ -44,7 +92,12 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertLessEqual(gap, 24)
 
     def test_history_columns_fill_common_window_widths(self) -> None:
-        self.window.tabs.setCurrentIndex(1)
+        history_index = next(
+            index
+            for index in range(self.window.tabs.count())
+            if self.window.tabs.tabText(index) == "History & Export"
+        )
+        self.window.tabs.setCurrentIndex(history_index)
         for width in (1400, 1800):
             with self.subTest(width=width):
                 self.window.resize(width, 800)
